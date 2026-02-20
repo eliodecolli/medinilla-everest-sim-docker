@@ -30,8 +30,8 @@ cd multi-charger-sim
 
 ```bash
 # Docker Image - Use local build or Docker Hub image
-IMAGE_NAME="everest-multi-sim"                    # Build locally (needs EVEREST_CORE_DIR)
-# IMAGE_NAME="your-username/everest-multi-sim"    # Pull from Docker Hub (no build needed)
+IMAGE_NAME="eliodecolli/everest-multi-sim"         # Pull from Docker Hub (recommended)
+# IMAGE_NAME="everest-multi-sim"                  # Build locally (needs EVEREST_CORE_DIR)
 
 # Your CSMS endpoint
 CSMS_URL="ws://192.168.1.100:9000/ocpp"
@@ -70,15 +70,15 @@ Instead of building locally (30-60 minutes), use a pre-built image from Docker H
 ./setup-multi-chargers.sh  # With IMAGE_NAME="everest-multi-sim"
 
 # Tag and push to Docker Hub
-docker tag everest-multi-sim:latest YOUR_USERNAME/everest-multi-sim:latest
-docker push YOUR_USERNAME/everest-multi-sim:latest
+docker tag everest-multi-sim:latest <your-dockerhub-username>/everest-multi-sim:latest
+docker push <your-dockerhub-username>/everest-multi-sim:latest
 ```
 
 ### 2. Update Config
 
 Edit `multi-charger.env`:
 ```bash
-IMAGE_NAME="YOUR_USERNAME/everest-multi-sim"
+IMAGE_NAME="<your-dockerhub-username>/everest-multi-sim"
 ```
 
 ### 3. Use on Any Machine (No EVerest Repo Needed!)
@@ -93,7 +93,7 @@ cd everest-core/applications/dev-environment
 
 # Create config with your Docker Hub image
 cat > config/multi-charger.env <<EOF
-IMAGE_NAME="YOUR_USERNAME/everest-multi-sim"
+IMAGE_NAME="<your-dockerhub-username>/everest-multi-sim"
 CSMS_URL="ws://192.168.1.100:9000/ocpp"
 NUM_CHARGERS=5
 CHARGER_PREFIX="CP_"
@@ -178,5 +178,5 @@ CONFIG_FILE=multi-charger-dev.env ./setup-multi-chargers.sh
 - Check file permissions: `chmod 644 config/multi-charger.env`
 
 **Image not found:**
-- If using Docker Hub image, make sure you pushed it: `docker push YOUR_USERNAME/everest-multi-sim:latest`
-- Or switch back to local build: `IMAGE_NAME="everest-multi-sim"`
+- Make sure the image is available: `docker pull eliodecolli/everest-multi-sim:latest`
+- Or build locally: set `IMAGE_NAME="everest-multi-sim"` and `EVEREST_CORE_DIR`

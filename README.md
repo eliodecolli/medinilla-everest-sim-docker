@@ -30,7 +30,7 @@ nano config/multi-charger.env
 
 Minimum required settings:
 ```bash
-IMAGE_NAME="your-dockerhub-username/everest-multi-sim"
+IMAGE_NAME="eliodecolli/everest-multi-sim"
 CSMS_URL="ws://192.168.1.100:9000/ocpp"
 NUM_CHARGERS=5
 ```
@@ -68,7 +68,7 @@ All settings in `config/multi-charger.env`:
 
 ```bash
 # Docker image (use Docker Hub or build locally)
-IMAGE_NAME="username/everest-multi-sim"
+IMAGE_NAME="eliodecolli/everest-multi-sim"
 
 # Your CSMS endpoint
 CSMS_URL="ws://192.168.1.100:9000/ocpp"
@@ -100,7 +100,7 @@ OCPP_VERSION="1.6"
 **Fully standalone** - no everest-core repo needed!
 
 ```bash
-IMAGE_NAME="your-username/everest-multi-sim"
+IMAGE_NAME="eliodecolli/everest-multi-sim"
 ```
 
 - ✅ Fast: Pull image instead of 30-60 min build
@@ -132,12 +132,9 @@ git clone https://github.com/EVerest/everest-core.git
 IMAGE_NAME="everest-multi-sim" EVEREST_CORE_DIR="./everest-core" ./setup-multi-chargers.sh
 
 # 3. Tag and push to Docker Hub (one-time)
-docker tag everest-multi-sim:latest your-username/everest-multi-sim:latest
+docker tag everest-multi-sim:latest <your-dockerhub-username>/everest-multi-sim:latest
 docker login
-docker push your-username/everest-multi-sim:latest
-
-# 4. Update config for future use
-echo 'IMAGE_NAME="your-username/everest-multi-sim"' > config/multi-charger.env
+docker push <your-dockerhub-username>/everest-multi-sim:latest
 ```
 
 Now everyone can use your image without building!
@@ -182,7 +179,7 @@ cd multi-charger-sim && ./restart.sh
 
 **Image not found:**
 - Check `IMAGE_NAME` in config
-- Make sure image is pushed: `docker push username/everest-multi-sim:latest`
+- Make sure image is pushed: `docker push eliodecolli/everest-multi-sim:latest`
 - Or build locally: Set `EVEREST_CORE_DIR`
 
 **Chargers not connecting:**
