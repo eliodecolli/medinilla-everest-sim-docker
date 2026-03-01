@@ -30,7 +30,7 @@ nano config/multi-charger.env
 
 Minimum required settings:
 ```bash
-IMAGE_NAME="eliodecolli/everest-multi-sim"
+IMAGE_NAME="eliodecolli/everest-sim-prebuilt:latest"
 CSMS_URL="ws://192.168.1.100:9000/ocpp"
 NUM_CHARGERS=5
 ```
@@ -68,7 +68,7 @@ All settings in `config/multi-charger.env`:
 
 ```bash
 # Docker image (use Docker Hub or build locally)
-IMAGE_NAME="eliodecolli/everest-multi-sim"
+IMAGE_NAME="eliodecolli/everest-sim-prebuilt:latest"
 
 # Your CSMS endpoint
 CSMS_URL="ws://192.168.1.100:9000/ocpp"
@@ -89,10 +89,6 @@ OCPP_VERSION="1.6"
 # EVEREST_CORE_DIR="/path/to/everest-core"
 ```
 
-## Documentation
-
-- **[README-MULTI-CHARGER.md](README-MULTI-CHARGER.md)** - Detailed configuration guide
-
 ## Two Usage Modes
 
 ### Mode 1: Docker Hub Image (Recommended)
@@ -100,7 +96,7 @@ OCPP_VERSION="1.6"
 **Fully standalone** - no everest-core repo needed!
 
 ```bash
-IMAGE_NAME="eliodecolli/everest-multi-sim"
+IMAGE_NAME="eliodecolli/everest-sim-prebuilt:latest"
 ```
 
 - ✅ Fast: Pull image instead of 30-60 min build
@@ -120,73 +116,6 @@ EVEREST_CORE_DIR="/path/to/everest-core"
 - ✅ Latest: Use unreleased features
 - ⏱️ Slow: 30-60 minute build time
 
-## Building & Pushing Docker Image
-
-First time setup - build the image once:
-
-```bash
-# 1. Clone everest-core (one-time)
-git clone https://github.com/EVerest/everest-core.git
-
-# 2. Build image (one-time, 30-60 min)
-IMAGE_NAME="everest-multi-sim" EVEREST_CORE_DIR="./everest-core" ./setup-multi-chargers.sh
-
-# 3. Tag and push to Docker Hub (one-time)
-docker tag everest-multi-sim:latest <your-dockerhub-username>/everest-multi-sim:latest
-docker login
-docker push <your-dockerhub-username>/everest-multi-sim:latest
-```
-
-Now everyone can use your image without building!
-
-## Project Structure
-
-```
-.
-├── setup-multi-chargers.sh       # Main setup script
-├── config/
-│   ├── multi-charger.env.example # Config template
-│   └── templates/                # EVerest config templates
-│       ├── config-sil-ocpp.yaml
-│       ├── ocpp-config.json
-│       └── config-sil-dc-flow.json
-├── README.md                     # This file
-└── README-MULTI-CHARGER.md       # Detailed config guide
-```
-
-## Control Scripts
-
-After running `./setup-multi-chargers.sh`, you get:
-
-```bash
-cd multi-charger-sim
-./start.sh       # Start all chargers
-./stop.sh        # Stop all chargers
-./restart.sh     # Restart all chargers
-./status.sh      # Check status
-./logs.sh        # View all logs
-./logs.sh 3      # View charger 3 logs only
-./open-uis.sh    # Open all UIs in browser
-```
-
-## Troubleshooting
-
-**Port conflicts:**
-```bash
-sudo lsof -ti:1880 | xargs sudo kill -9
-cd multi-charger-sim && ./restart.sh
-```
-
-**Image not found:**
-- Check `IMAGE_NAME` in config
-- Make sure image is pushed: `docker push eliodecolli/everest-multi-sim:latest`
-- Or build locally: Set `EVEREST_CORE_DIR`
-
-**Chargers not connecting:**
-- Check CSMS is running
-- Verify `CSMS_URL` format: `ws://IP:PORT/path`
-- View logs: `cd multi-charger-sim && ./logs.sh`
-
 ## Use Cases
 
 - 🧪 **Load Testing**: Simulate 50+ chargers connecting simultaneously
@@ -195,13 +124,6 @@ cd multi-charger-sim && ./restart.sh
 - 📊 **Demos**: Show CSMS capabilities with multiple chargers
 - ✅ **CI/CD**: Automated testing pipelines
 
-## License
-
-Based on EVerest (Apache 2.0)
-
-## Contributing
-
-Issues and PRs welcome!
 
 ## Links
 

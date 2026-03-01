@@ -11,7 +11,6 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 EVEREST_CORE_DIR=""
-DOCKER_BUILD_DIR="$EVEREST_CORE_DIR/applications/utils/docker/everest-docker-image"
 
 echo -e "${GREEN}=== EVerest Multi-Charger Simulation Setup ===${NC}\n"
 
@@ -28,6 +27,7 @@ fi
 if [ -f "$CONFIG_FILE" ]; then
     echo -e "${GREEN}Loading configuration from $CONFIG_FILE${NC}"
     source "$CONFIG_FILE"
+    DOCKER_BUILD_DIR="$EVEREST_CORE_DIR/applications/utils/docker/everest-docker-image"
 else
     echo -e "${RED}Error: No config file found.${NC}"
     echo -e "${YELLOW}Copy config/multi-charger.env.example to config/multi-charger.env and customize it.${NC}"
@@ -54,7 +54,7 @@ else
 fi
 
 # Check if we can build (only needed for local builds)
-if [[ "$IMAGE_NAME" != *"/"* ]]; then
+if [[ "$IMAGE_NAME" != *"/"* ]] && ! docker images --format '{{.Repository}}' | grep -q "^${IMAGE_NAME}$"; then
     # Local build - need everest-core repo
     if [ ! -d "$EVEREST_CORE_DIR" ]; then
         echo -e "${RED}Error: Building locally requires everest-core directory${NC}"
@@ -101,13 +101,20 @@ echo "This may take 10-15 minutes on first build (cached after that)"
 echo ""
 
 # Determine config file based on OCPP version
+if [ "$USE_TEMPLATES" = true ]; then
+    CONFIG_BASE_DIR="$TEMPLATES_DIR"
+else
+    CONFIG_BASE_DIR="$EVEREST_CORE_DIR/config"
+fi
+
 if [[ "$OCPP_VERSION" == "2.0.1" ]]; then
-    BASE_CONFIG="$EVEREST_CORE_DIR/config/config-sil-ocpp201.yaml"
+    BASE_CONFIG="$CONFIG_BASE_DIR/config-sil-ocpp201.yaml"
     if [ ! -f "$BASE_CONFIG" ]; then
-        BASE_CONFIG="$EVEREST_CORE_DIR/config/config-sil.yaml"
+        echo "2.0.1 Not Found: Reverting to 1.6"
+        BASE_CONFIG="$CONFIG_BASE_DIR/config-sil.yaml"
     fi
 else
-    BASE_CONFIG="$EVEREST_CORE_DIR/config/config-sil.yaml"
+    BASE_CONFIG="$CONFIG_BASE_DIR/config-sil.yaml"
 fi
 
 # Check if image already exists (only build if it's the local name, not a registry image)
@@ -174,10 +181,8 @@ for i in $(seq 1 $NUM_CHARGERS); do
 
     if [ -f "$FLOW_SOURCE" ]; then
         cp "$FLOW_SOURCE" "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json"
-        # Update MQTT broker references to point to this charger's isolated MQTT
-        sed -i "s/\"broker\":\"mqtt-server\"/\"broker\":\"mqtt_$i\"/g" "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json"
-        sed -i "s/\"broker\":\"mqtt\"/\"broker\":\"mqtt_$i\"/g" "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json"
-        sed -i "s/mqtt-server/mqtt_$i/g" "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json"
+        # Patch the mqtt-broker node's hostname to point to this charger's isolated MQTT broker
+        sed -i "s/\"broker\": \"localhost\"/\"broker\": \"mqtt_$i\"/g" "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json"
     else
         echo -e "${YELLOW}Warning: DC flow not found at $FLOW_SOURCE${NC}"
         echo "[]" > "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json"
@@ -215,7 +220,14 @@ EOF
 EOF
 
     # Add EVerest charger service
-    cat >> "$MULTI_CHARGER_DIR/docker-compose.yml" <<EOF
+    if [[ "$OCPP_VERSION" == "2.0.1" ]]; then
+        OCPP_VOLUME=""
+    else
+        OCPP_VOLUME="      - ./configs/ocpp-$i.json:/opt/everest/config/ocpp-$i.json:ro"
+    fi
+
+    if [[ "$OCPP_VERSION" == "2.0.1" ]]; then
+        cat >> "$MULTI_CHARGER_DIR/docker-compose.yml" <<EOF
   $SERVICE_NAME:
     image: ${IMAGE_NAME}:latest
     container_name: charger-$i
@@ -224,7 +236,25 @@ EOF
       - $NODERED_SERVICE
     volumes:
       - ./configs/charger-$i.yaml:/opt/everest/config/config.yaml:ro
-      - ./configs/ocpp-$i.json:/opt/everest/config/ocpp-$i.json:ro
+      - ./logs:/opt/everest/logs
+    environment:
+      - EVEREST_CHARGER_ID=$CHARGER_ID
+      - EVEREST_CSMS_URL=$CSMS_URL
+    networks:
+      - charger-network-$i
+
+EOF
+    else
+        cat >> "$MULTI_CHARGER_DIR/docker-compose.yml" <<EOF
+  $SERVICE_NAME:
+    image: ${IMAGE_NAME}:latest
+    container_name: charger-$i
+    depends_on:
+      - mqtt_$i
+      - $NODERED_SERVICE
+    volumes:
+      - ./configs/charger-$i.yaml:/opt/everest/config/config.yaml:ro
+$OCPP_VOLUME
       - ./logs:/opt/everest/logs
     environment:
       - CHARGER_ID=$CHARGER_ID
@@ -233,16 +263,26 @@ EOF
       - charger-network-$i
 
 EOF
-
-    # Copy real EVerest OCPP config
-    if [ "$USE_TEMPLATES" = true ]; then
-        cp "$CONFIG_SOURCE/config-sil-ocpp.yaml" "$MULTI_CHARGER_DIR/configs/charger-$i.yaml"
-    else
-        cp "$CONFIG_SOURCE/config/config-sil-ocpp.yaml" "$MULTI_CHARGER_DIR/configs/charger-$i.yaml"
     fi
 
-    # Update OCPP config path to point to charger-specific JSON
-    sed -i 's|ChargePointConfigPath:.*|ChargePointConfigPath: /opt/everest/config/ocpp-'$i'.json|' "$MULTI_CHARGER_DIR/configs/charger-$i.yaml"
+    # Copy real EVerest OCPP config
+    if [[ "$OCPP_VERSION" == "2.0.1" ]]; then
+        OCPP_CONFIG_YAML="config-sil-ocpp201.yaml"
+    else
+        OCPP_CONFIG_YAML="config-sil-ocpp.yaml"
+    fi
+
+    if [ "$USE_TEMPLATES" = true ]; then
+        cp "$CONFIG_SOURCE/$OCPP_CONFIG_YAML" "$MULTI_CHARGER_DIR/configs/charger-$i.yaml"
+    else
+        cp "$CONFIG_SOURCE/config/$OCPP_CONFIG_YAML" "$MULTI_CHARGER_DIR/configs/charger-$i.yaml"
+    fi
+
+    # Update OCPP config path to point to charger-specific JSON (1.6 only; 2.0.1 uses device model DB)
+    if [[ "$OCPP_VERSION" != "2.0.1" ]]; then
+        sed -i 's|ChargePointConfigPath:.*|ChargePointConfigPath: /opt/everest/config/ocpp-'$i'.json|' "$MULTI_CHARGER_DIR/configs/charger-$i.yaml"
+    fi
+
 
     # Add settings section with MQTT broker configuration
     cat >> "$MULTI_CHARGER_DIR/configs/charger-$i.yaml" <<SETTINGS_EOF
@@ -253,17 +293,18 @@ settings:
   telemetry_enabled: false
 SETTINGS_EOF
 
-    # Create OCPP JSON config for this charger
-    if [ "$USE_TEMPLATES" = true ]; then
-        cp "$CONFIG_SOURCE/ocpp-config.json" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
-    else
-        cp "$CONFIG_SOURCE/lib/everest/ocpp/config/v16/config-docker.json" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
-    fi
+    # Create OCPP JSON config for this charger (1.6 only)
+    if [[ "$OCPP_VERSION" != "2.0.1" ]]; then
+        if [ "$USE_TEMPLATES" = true ]; then
+            cp "$CONFIG_SOURCE/ocpp-config.json" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
+        else
+            cp "$CONFIG_SOURCE/lib/everest/ocpp/config/v16/config-docker.json" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
+        fi
 
-    # Update OCPP JSON with charger-specific settings
-    sed -i "s/\"ChargePointId\": \".*\"/\"ChargePointId\": \"$CHARGER_ID\"/" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
-    sed -i "s|\"CentralSystemURI\": \".*\"|\"CentralSystemURI\": \"$CSMS_URL\"|" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
-    sed -i "s/\"ChargeBoxSerialNumber\": \".*\"/\"ChargeBoxSerialNumber\": \"SN-$CHARGER_ID\"/" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
+        sed -i "s/\"ChargePointId\": \".*\"/\"ChargePointId\": \"$CHARGER_ID\"/" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
+        sed -i "s|\"CentralSystemURI\": \".*\"|\"CentralSystemURI\": \"$CSMS_URL\"|" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
+        sed -i "s/\"ChargeBoxSerialNumber\": \".*\"/\"ChargeBoxSerialNumber\": \"SN-$CHARGER_ID\"/" "$MULTI_CHARGER_DIR/configs/ocpp-$i.json"
+    fi
 
 done
 
@@ -283,16 +324,37 @@ done
 
 echo -e "\n${BLUE}Step 3: Creating control scripts...${NC}"
 
-# Create start script
-cat > "$MULTI_CHARGER_DIR/start.sh" <<'BASH_EOF'
+# Copy simple scripts from templates
+cp "$TEMPLATES_DIR/stop.sh"       "$MULTI_CHARGER_DIR/stop.sh"
+cp "$TEMPLATES_DIR/logs.sh"       "$MULTI_CHARGER_DIR/logs.sh"
+cp "$TEMPLATES_DIR/restart.sh"    "$MULTI_CHARGER_DIR/restart.sh"
+cp "$TEMPLATES_DIR/status.sh"     "$MULTI_CHARGER_DIR/status.sh"
+chmod +x "$MULTI_CHARGER_DIR/stop.sh" "$MULTI_CHARGER_DIR/logs.sh" \
+         "$MULTI_CHARGER_DIR/restart.sh" "$MULTI_CHARGER_DIR/status.sh"
+
+# Create open-uis.sh (dynamic: per-charger port list)
+cat > "$MULTI_CHARGER_DIR/open-uis.sh" <<'EOF'
+#!/bin/bash
+echo "Opening charger UIs in browser..."
+EOF
+for i in $(seq 1 $NUM_CHARGERS); do
+    UI_PORT=$((START_PORT + i - 1))
+    echo "xdg-open http://localhost:$UI_PORT/ui 2>/dev/null || open http://localhost:$UI_PORT/ui 2>/dev/null &" >> "$MULTI_CHARGER_DIR/open-uis.sh"
+done
+echo "echo 'UIs opened in browser'" >> "$MULTI_CHARGER_DIR/open-uis.sh"
+chmod +x "$MULTI_CHARGER_DIR/open-uis.sh"
+
+# Create start.sh
+cat > "$MULTI_CHARGER_DIR/start.sh" <<'STARTEOF'
 #!/bin/bash
 echo "Starting multi-charger simulation..."
 docker compose up -d
+
 echo ""
-echo "✅ Chargers started!"
+echo "Chargers started!"
 echo ""
-echo "📱 Access UIs:"
-BASH_EOF
+echo "Access UIs:"
+STARTEOF
 
 for i in $(seq 1 $NUM_CHARGERS); do
     CHARGER_ID="${CHARGER_PREFIX}$(printf "%03d" $i)"
@@ -300,63 +362,12 @@ for i in $(seq 1 $NUM_CHARGERS); do
     echo "echo \"   $CHARGER_ID: http://localhost:$UI_PORT/ui\"" >> "$MULTI_CHARGER_DIR/start.sh"
 done
 
-cat >> "$MULTI_CHARGER_DIR/start.sh" <<'BASH_EOF'
+cat >> "$MULTI_CHARGER_DIR/start.sh" <<'STARTEOF'
 echo ""
-echo "📊 View logs:"
-echo "   ./logs.sh          # All chargers"
-echo "   ./logs.sh 1        # Charger 1 only"
-echo ""
-echo "🛑 Stop:"
-echo "   ./stop.sh"
-BASH_EOF
+echo "View logs:  ./logs.sh"
+echo "Stop:       ./stop.sh"
+STARTEOF
 chmod +x "$MULTI_CHARGER_DIR/start.sh"
-
-# Create other scripts
-cat > "$MULTI_CHARGER_DIR/stop.sh" <<'EOF'
-#!/bin/bash
-echo "Stopping multi-charger simulation..."
-docker compose down
-echo "Stopped."
-EOF
-chmod +x "$MULTI_CHARGER_DIR/stop.sh"
-
-cat > "$MULTI_CHARGER_DIR/logs.sh" <<'EOF'
-#!/bin/bash
-if [ -z "$1" ]; then
-    echo "Showing logs for all chargers..."
-    docker compose logs -f
-else
-    echo "Showing logs for charger $1..."
-    docker compose logs -f charger_$1
-fi
-EOF
-chmod +x "$MULTI_CHARGER_DIR/logs.sh"
-
-cat > "$MULTI_CHARGER_DIR/restart.sh" <<'EOF'
-#!/bin/bash
-echo "Restarting multi-charger simulation..."
-docker compose restart
-EOF
-chmod +x "$MULTI_CHARGER_DIR/restart.sh"
-
-cat > "$MULTI_CHARGER_DIR/status.sh" <<'EOF'
-#!/bin/bash
-docker compose ps
-EOF
-chmod +x "$MULTI_CHARGER_DIR/status.sh"
-
-cat > "$MULTI_CHARGER_DIR/open-uis.sh" <<'EOF'
-#!/bin/bash
-echo "Opening charger UIs in browser..."
-EOF
-
-for i in $(seq 1 $NUM_CHARGERS); do
-    UI_PORT=$((START_PORT + i - 1))
-    echo "xdg-open http://localhost:$UI_PORT/ui 2>/dev/null || open http://localhost:$UI_PORT/ui 2>/dev/null &" >> "$MULTI_CHARGER_DIR/open-uis.sh"
-done
-
-echo "echo 'UIs opened in browser'" >> "$MULTI_CHARGER_DIR/open-uis.sh"
-chmod +x "$MULTI_CHARGER_DIR/open-uis.sh"
 
 # Create README
 cat > "$MULTI_CHARGER_DIR/README.md" <<EOF
