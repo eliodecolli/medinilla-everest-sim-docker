@@ -121,7 +121,7 @@ fi
 if [[ "$IMAGE_NAME" == *"/"* ]]; then
     echo -e "${BLUE}Using registry image: $IMAGE_NAME${NC}"
     echo "Pulling image..."
-    docker pull "$IMAGE_NAME:latest" || echo -e "${YELLOW}Warning: Could not pull image, will use local if available${NC}"
+    docker pull "$IMAGE_NAME" || echo -e "${YELLOW}Warning: Could not pull image, will use local if available${NC}"
 elif docker images | grep -q "$IMAGE_NAME"; then
     echo -e "${YELLOW}Image $IMAGE_NAME already exists. Skipping build.${NC}"
     echo "To rebuild, run: docker rmi $IMAGE_NAME"
