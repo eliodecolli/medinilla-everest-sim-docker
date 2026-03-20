@@ -95,6 +95,7 @@ MULTI_CHARGER_DIR="./multi-charger-sim"
 mkdir -p "$MULTI_CHARGER_DIR/configs"
 mkdir -p "$MULTI_CHARGER_DIR/nodered-data"
 mkdir -p "$MULTI_CHARGER_DIR/logs"
+mkdir -p "$MULTI_CHARGER_DIR/other-logs"
 
 echo -e "\n${BLUE}Step 1: Building EVerest Docker image...${NC}"
 echo "This may take 10-15 minutes on first build (cached after that)"
@@ -254,10 +255,12 @@ EOF
       - $NODERED_SERVICE
     volumes:
       - ./configs/charger-$i.yaml:/opt/everest/config/config.yaml:ro
-$OCPP_VOLUME
+      - ./configs/ocpp-$i.json:/opt/everest/config/ocpp-$i.json:ro
       - ./logs:/opt/everest/logs
+      - ./other-logs:/tmp/everest-logs
     environment:
-      - CHARGER_ID=$CHARGER_ID
+      - EVEREST_CHARGER_ID=$CHARGER_ID
+      - EVEREST_CSMS_URL=$CSMS_URL
     command: ["/opt/everest/bin/manager", "--conf", "/opt/everest/config/config.yaml"]
     networks:
       - charger-network-$i
@@ -318,6 +321,7 @@ EOF
 for i in $(seq 1 $NUM_CHARGERS); do
     cat >> "$MULTI_CHARGER_DIR/docker-compose.yml" <<EOF
   charger-network-$i:
+    enable_ipv6: true
     driver: bridge
 EOF
 done
