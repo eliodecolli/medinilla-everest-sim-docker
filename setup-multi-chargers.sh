@@ -38,17 +38,43 @@ fi
 TEMPLATES_DIR="${SCRIPT_DIR}/config/templates"
 USE_TEMPLATES=false
 
-if [ -d "$TEMPLATES_DIR" ] && [ -f "$TEMPLATES_DIR/config-sil-ocpp.yaml" ]; then
-    echo -e "${GREEN}Using config templates from $TEMPLATES_DIR${NC}"
+# Templates dir is required for control scripts (stop.sh, logs.sh, etc.)
+if [ ! -d "$TEMPLATES_DIR" ]; then
+    echo -e "${RED}Error: Templates directory not found at $TEMPLATES_DIR${NC}"
+    exit 1
+fi
+missing_scripts=()
+for f in stop.sh logs.sh restart.sh status.sh; do
+    [ -f "$TEMPLATES_DIR/$f" ] || missing_scripts+=("$f")
+done
+if [ ${#missing_scripts[@]} -gt 0 ]; then
+    echo -e "${RED}Error: Missing control scripts in $TEMPLATES_DIR: ${missing_scripts[*]}${NC}"
+    exit 1
+fi
+
+# EVerest configs: prefer templates if complete, else fall back to everest-core repo
+required_cfg=(config-sil-dc-flow.json)
+if [[ "$OCPP_VERSION" == "2.0.1" ]]; then
+    required_cfg+=(config-sil-ocpp201.yaml)
+else
+    required_cfg+=(config-sil-ocpp.yaml ocpp-config.json)
+fi
+missing_cfg=()
+for f in "${required_cfg[@]}"; do
+    [ -f "$TEMPLATES_DIR/$f" ] || missing_cfg+=("$f")
+done
+if [ ${#missing_cfg[@]} -eq 0 ]; then
+    echo -e "${GREEN}Using EVerest configs from templates: $TEMPLATES_DIR${NC}"
     USE_TEMPLATES=true
     CONFIG_SOURCE="$TEMPLATES_DIR"
 elif [ -d "$EVEREST_CORE_DIR" ]; then
-    echo -e "${GREEN}Using configs from EVerest repo: $EVEREST_CORE_DIR${NC}"
+    echo -e "${YELLOW}Templates incomplete (missing: ${missing_cfg[*]}), falling back to everest-core repo${NC}"
+    USE_TEMPLATES=false
     CONFIG_SOURCE="$EVEREST_CORE_DIR"
 else
-    echo -e "${RED}Error: No config source found!${NC}"
+    echo -e "${RED}Error: No usable EVerest config source!${NC}"
     echo -e "${YELLOW}Options:${NC}"
-    echo "  1. Templates are missing - they should be in: $TEMPLATES_DIR"
+    echo "  1. Provide complete templates in: $TEMPLATES_DIR"
     echo "  2. Set EVEREST_CORE_DIR to point to everest-core repository"
     exit 1
 fi
@@ -68,6 +94,16 @@ if [[ -z "$CSMS_URL" ]]; then
     echo -e "${RED}Error: CSMS URL is required${NC}"
     exit 1
 fi
+
+# Build image reference, preserving any tag the user already supplied
+if [[ "$IMAGE_NAME" == *":"* ]]; then
+    IMAGE_REF="$IMAGE_NAME"
+else
+    IMAGE_REF="${IMAGE_NAME}:latest"
+fi
+
+# Default branch to build from when building locally
+EVEREST_BRANCH="${EVEREST_BRANCH:-main}"
 
 if ! [[ "$NUM_CHARGERS" =~ ^[0-9]+$ ]] || [ "$NUM_CHARGERS" -lt 1 ]; then
     echo -e "${RED}Error: Number of chargers must be a positive integer${NC}"
@@ -96,9 +132,7 @@ mkdir -p "$MULTI_CHARGER_DIR/configs"
 mkdir -p "$MULTI_CHARGER_DIR/nodered-data"
 mkdir -p "$MULTI_CHARGER_DIR/logs"
 
-echo -e "\n${BLUE}Step 1: Building EVerest Docker image...${NC}"
-echo "This may take 10-15 minutes on first build (cached after that)"
-echo ""
+echo -e "\n${BLUE}Step 1: Preparing EVerest Docker image...${NC}"
 
 # Determine config file based on OCPP version
 if [ "$USE_TEMPLATES" = true ]; then
@@ -110,8 +144,9 @@ fi
 if [[ "$OCPP_VERSION" == "2.0.1" ]]; then
     BASE_CONFIG="$CONFIG_BASE_DIR/config-sil-ocpp201.yaml"
     if [ ! -f "$BASE_CONFIG" ]; then
-        echo "2.0.1 Not Found: Reverting to 1.6"
-        BASE_CONFIG="$CONFIG_BASE_DIR/config-sil.yaml"
+        echo -e "${RED}Error: OCPP 2.0.1 selected but $BASE_CONFIG not found.${NC}"
+        echo -e "${YELLOW}Set OCPP_VERSION=1.6 in your config or provide the 2.0.1 config.${NC}"
+        exit 1
     fi
 else
     BASE_CONFIG="$CONFIG_BASE_DIR/config-sil.yaml"
@@ -122,14 +157,16 @@ if [[ "$IMAGE_NAME" == *"/"* ]]; then
     echo -e "${BLUE}Using registry image: $IMAGE_NAME${NC}"
     echo "Pulling image..."
     docker pull "$IMAGE_NAME" || echo -e "${YELLOW}Warning: Could not pull image, will use local if available${NC}"
-elif docker images | grep -q "$IMAGE_NAME"; then
-    echo -e "${YELLOW}Image $IMAGE_NAME already exists. Skipping build.${NC}"
-    echo "To rebuild, run: docker rmi $IMAGE_NAME"
+elif docker image inspect "$IMAGE_REF" >/dev/null 2>&1; then
+    echo -e "${YELLOW}Image $IMAGE_REF already exists. Skipping build.${NC}"
+    echo "To rebuild, run: docker rmi $IMAGE_REF"
 else
     # Build the base EVerest image
+    echo "Building image (this may take 10-15 minutes on first build, cached after that)..."
     ORIGINAL_DIR=$(pwd)
+    trap 'cd "$ORIGINAL_DIR" 2>/dev/null || true' EXIT
     cd "$DOCKER_BUILD_DIR"
-    ./build.sh --conf "$BASE_CONFIG" --name "$IMAGE_NAME" --branch main
+    ./build.sh --conf "$BASE_CONFIG" --name "$IMAGE_NAME" --branch "$EVEREST_BRANCH"
 
     # Load the built image
     TARBALL=$(ls -t ${IMAGE_NAME}*.tar.gz 2>/dev/null | head -1)
@@ -140,16 +177,12 @@ else
         echo -e "${RED}Error: Could not find built image tarball${NC}"
         exit 1
     fi
-
-    cd "$ORIGINAL_DIR"
 fi
 
 echo -e "\n${BLUE}Step 2: Creating Docker Compose configuration...${NC}"
 
 # Create docker-compose.yml
 cat > "$MULTI_CHARGER_DIR/docker-compose.yml" <<EOF
-version: '3.8'
-
 services:
 EOF
 
@@ -208,7 +241,6 @@ EOF
     volumes:
       - ./nodered-data/charger-$i:/data
     environment:
-      - TZ=Europe/Berlin
       - NODE_RED_ENABLE_SAFE_MODE=false
       - MQTT_BROKER=mqtt_$i
       - MQTT_PORT=1883
@@ -229,7 +261,7 @@ EOF
     if [[ "$OCPP_VERSION" == "2.0.1" ]]; then
         cat >> "$MULTI_CHARGER_DIR/docker-compose.yml" <<EOF
   $SERVICE_NAME:
-    image: ${IMAGE_NAME}:latest
+    image: ${IMAGE_REF}
     container_name: charger-$i
     depends_on:
       - mqtt_$i
@@ -247,7 +279,7 @@ EOF
     else
         cat >> "$MULTI_CHARGER_DIR/docker-compose.yml" <<EOF
   $SERVICE_NAME:
-    image: ${IMAGE_NAME}:latest
+    image: ${IMAGE_REF}
     container_name: charger-$i
     depends_on:
       - mqtt_$i
@@ -284,7 +316,26 @@ EOF
     fi
 
 
-    # Add settings section with MQTT broker configuration
+    # Strip any existing top-level 'settings:' block to avoid duplicate YAML keys,
+    # then add our own with per-charger MQTT broker configuration
+    python3 -c "
+import sys
+p = sys.argv[1]
+lines = open(p).readlines()
+out = []
+skip = False
+for line in lines:
+    if line.startswith('settings:'):
+        skip = True
+        continue
+    if skip:
+        if line.startswith((' ', '\t')) or line.strip() == '':
+            continue
+        skip = False
+    out.append(line)
+open(p, 'w').writelines(out)
+" "$MULTI_CHARGER_DIR/configs/charger-$i.yaml"
+
     cat >> "$MULTI_CHARGER_DIR/configs/charger-$i.yaml" <<SETTINGS_EOF
 
 settings:
