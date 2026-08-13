@@ -166,7 +166,15 @@ active_modules:
     config_module:
       private_key_password: "123456"
   token_provider_1:
-    module: DummyTokenProviderManual
+    module: DummyTokenProvider
+    config_module:
+      token: DEADBEEF
+      type: RFID
+      timeout: 30
+    connections:
+      evse:
+        - module_id: evse_manager_1
+          implementation_id: evse
   auth:
     module: Auth
     config_module:

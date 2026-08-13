@@ -216,6 +216,55 @@ for i in $(seq 1 $NUM_CHARGERS); do
         cp "$FLOW_SOURCE" "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json"
         # Patch the mqtt-broker node's hostname to point to this charger's isolated MQTT broker
         sed -i "s/\"broker\": \"localhost\"/\"broker\": \"mqtt_$i\"/g" "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json"
+
+        # Ensure the "Car Simulation" dropdown has all three scenarios (AC, DC basic, DC ISO15118-2).
+        # Idempotent: if a label is already present it is left in place; missing entries are inserted
+        # before any existing entries so the default remains the first listed.
+        python3 - "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    flow = json.load(f)
+
+AC_OPT = {
+    "label": "AC IEC61851 (PWM)",
+    "value": "sleep 1;iec_wait_pwr_ready;sleep 1;draw_power_regulated 16,3;sleep 60;unplug#unplug#pause_charging#draw_power_regulated 16,3",
+    "type": "str",
+}
+DC_ISO_OPT = {
+    "label": "DC ISO15118-2",
+    "value": "sleep 1;iso_wait_slac_matched;iso_start_v2g_session DC 86400 0;iso_wait_pwr_ready;iso_dc_power_on;iso_wait_for_stop 36000#iso_stop_charging;iso_wait_v2g_session_stopped;unplug#iso_pause_charging;iso_wait_for_resume#iso_start_bcb_toggle 3;iso_wait_pwm_is_running;iso_start_v2g_session DC 86400 0;iso_wait_pwr_ready;iso_dc_power_on;sleep 36000;",
+    "type": "str",
+}
+
+CANONICAL = [AC_OPT, DC_ISO_OPT]
+LABEL_ORDER = {"AC IEC61851 (PWM)": 0, "DC ISO15118-2": 1}
+
+changed = False
+for node in flow:
+    if node.get("type") == "ui_dropdown" and node.get("label") == "Car Simulation":
+        existing = node.get("options", [])
+        existing_labels = {o.get("label") for o in existing}
+        merged = []
+        # Insert canonical entries in canonical order, only if missing.
+        for opt in CANONICAL:
+            if opt["label"] in existing_labels:
+                # keep the original definition (don't overwrite user edits)
+                merged.append(next(o for o in existing if o.get("label") == opt["label"]))
+            else:
+                merged.append(opt)
+                changed = True
+        # Append any non-canonical options (defensive: shouldn't be any, but safe).
+        for opt in existing:
+            if opt.get("label") not in LABEL_ORDER:
+                merged.append(opt)
+        node["options"] = merged
+        break
+
+if changed:
+    with open(path, "w") as f:
+        json.dump(flow, f, indent=4)
+PYEOF
     else
         echo -e "${YELLOW}Warning: DC flow not found at $FLOW_SOURCE${NC}"
         echo "[]" > "$MULTI_CHARGER_DIR/nodered-data/charger-$i/flows.json"
